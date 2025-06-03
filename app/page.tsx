@@ -45,7 +45,8 @@ const SafeStorage = {
         }
       })
     } catch (error) {
-      console.log('🔒 Storage unavailable (safe mode enabled):', error.message)
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      console.log('🔒 Storage unavailable (safe mode enabled):', errorMessage)
       this.isAvailable = false
     }
     

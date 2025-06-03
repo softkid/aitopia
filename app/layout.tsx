@@ -6,8 +6,8 @@ const inter = Inter({ subsets: ['latin'] })
 
 export const metadata: Metadata = {
   title: 'AITOPIA - AI 수익화 플랫폼',
-  description: 'AI를 활용한 자동화 프로세스로 수익을 창출하는 혁신적인 플랫폼',
-  keywords: ['AI', '자동화', '수익', 'USDT', '암호화폐', 'ZK증명'],
+  description: 'ZK 알고리즘 기반 익명 AI 수익화 플랫폼',
+  keywords: 'AI, 수익화, 블록체인, USDT, 자동화',
   authors: [{ name: 'AITOPIA Team' }],
   creator: 'AITOPIA',
   publisher: 'AITOPIA',
@@ -18,9 +18,9 @@ export const metadata: Metadata = {
   },
   manifest: '/manifest.json',
   icons: {
-    icon: '/icon-192x192.png',
-    shortcut: '/icon-192x192.png',
-    apple: '/icon-192x192.png',
+    icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">⚡</text></svg>',
+    shortcut: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">⚡</text></svg>',
+    apple: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y=".9em" font-size="90">⚡</text></svg>'
   },
   appleWebApp: {
     capable: true,
@@ -38,6 +38,12 @@ export const metadata: Metadata = {
     title: 'AITOPIA - AI 수익화 플랫폼',
     description: 'AI를 활용한 자동화 프로세스로 수익을 창출하는 혁신적인 플랫폼',
   },
+  other: {
+    'mobile-web-app-capable': 'yes',
+    'apple-mobile-web-app-capable': 'yes',
+    'apple-mobile-web-app-status-bar-style': 'default',
+    'theme-color': '#3b82f6'
+  }
 }
 
 export const viewport: Viewport = {
@@ -61,6 +67,8 @@ export default function RootLayout({
       <head>
         <link rel="preconnect" href="https://fonts.googleapis.com" />
         <link rel="preconnect" href="https://fonts.gstatic.com" crossOrigin="anonymous" />
+        <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
+        <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
       </head>
       <body className={`${inter.className} antialiased bg-gray-50 dark:bg-gray-900`}>
         <div id="root" className="min-h-screen">
