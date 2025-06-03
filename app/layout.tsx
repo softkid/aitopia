@@ -1,6 +1,7 @@
 import './globals.css'
 import { Inter } from 'next/font/google'
 import { Metadata, Viewport } from 'next'
+import Providers from './providers'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -71,9 +72,11 @@ export default function RootLayout({
         <link rel="apple-touch-icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>" />
       </head>
       <body className={`${inter.className} antialiased bg-gray-50 dark:bg-gray-900`}>
-        <div id="root" className="min-h-screen">
-          {children}
-        </div>
+        <Providers>
+          <div id="root" className="min-h-screen">
+            {children}
+          </div>
+        </Providers>
       </body>
     </html>
   )

@@ -1,6 +1,8 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSession } from 'next-auth/react'
+import GoogleLogin from './components/GoogleLogin'
 
 // MetaMask 타입 정의
 declare global {
@@ -20,47 +22,54 @@ const SafeStorage = {
   async init() {
     if (this.testCompleted) return this.isAvailable
     
-    // 다중 안전성 검사
+    // 완전히 안전한 다중 검사
     try {
-      // 1단계: 기본 환경 체크
-      if (typeof window === 'undefined') return false
-      if (typeof Storage === 'undefined') return false
-      if (!window.localStorage) return false
+      // 1단계: 환경 체크
+      if (typeof window === 'undefined') {
+        this.testCompleted = true
+        return false
+      }
       
-      // 2단계: 실제 접근 테스트 (가장 안전한 방법)
-      await new Promise((resolve, reject) => {
+      // 2단계: Storage 존재 체크
+      if (typeof Storage === 'undefined' || !window.localStorage) {
+        this.testCompleted = true
+        return false
+      }
+      
+      // 3단계: 실제 접근 테스트 (완전히 안전)
+      await new Promise((resolve) => {
         try {
           const testKey = `__test_${Date.now()}_${Math.random()}`
           const testValue = 'test'
           
-          // 쓰기 테스트
-          window.localStorage.setItem(testKey, testValue)
-          
-          // 읽기 테스트  
-          const retrieved = window.localStorage.getItem(testKey)
-          
-          // 삭제 테스트
-          window.localStorage.removeItem(testKey)
-          
-          // 검증
-          if (retrieved === testValue) {
-            this.isAvailable = true
-            resolve(true)
-          } else {
-            reject(new Error('Storage test failed'))
+          // 완전히 감싸진 테스트
+          try {
+            window.localStorage.setItem(testKey, testValue)
+            const retrieved = window.localStorage.getItem(testKey)
+            window.localStorage.removeItem(testKey)
+            
+            if (retrieved === testValue) {
+              this.isAvailable = true
+            }
+          } catch (innerError) {
+            // 내부 에러는 완전히 무시
+            this.isAvailable = false
           }
-        } catch (error) {
+          
+          resolve(true)
+        } catch (outerError) {
+          // 외부 에러도 완전히 무시
           this.isAvailable = false
-          reject(error)
+          resolve(true)
         }
       })
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-      console.log('🔒 Storage unavailable (safe mode enabled):', errorMessage)
+      // 모든 에러를 완전히 무시
       this.isAvailable = false
     }
     
     this.testCompleted = true
+    console.log('🔒 Storage check completed:', this.isAvailable ? 'Available' : 'Safe mode')
     return this.isAvailable
   },
 
@@ -68,8 +77,7 @@ const SafeStorage = {
     if (!this.isAvailable) return null
     try {
       return window.localStorage.getItem(key)
-    } catch (error) {
-      console.log(`🔒 Storage read failed for ${key} (ignored)`)
+    } catch {
       return null
     }
   },
@@ -79,8 +87,7 @@ const SafeStorage = {
     try {
       window.localStorage.setItem(key, value)
       return true
-    } catch (error) {
-      console.log(`🔒 Storage write failed for ${key} (ignored)`)
+    } catch {
       return false
     }
   },
@@ -90,14 +97,14 @@ const SafeStorage = {
     try {
       window.localStorage.removeItem(key)
       return true
-    } catch (error) {
-      console.log(`🔒 Storage remove failed for ${key} (ignored)`)
+    } catch {
       return false
     }
   }
 }
 
 export default function Home() {
+  const { data: session, status } = useSession()
   const [isLoading, setIsLoading] = useState(true)
   const [walletAddress, setWalletAddress] = useState('')
   const [currentView, setCurrentView] = useState('dashboard')
@@ -110,6 +117,7 @@ export default function Home() {
   const [bankName, setBankName] = useState('')
   const [hasMetaMask, setHasMetaMask] = useState(false)
   const [storageAvailable, setStorageAvailable] = useState(false)
+  const [googleUser, setGoogleUser] = useState<any>(null)
   
   // 마이데이터 동의 상태
   const [myDataConsents, setMyDataConsents] = useState({
@@ -189,6 +197,15 @@ export default function Home() {
     }
   }, [])
 
+  // 세션 변경 감지
+  useEffect(() => {
+    if (session?.user) {
+      setGoogleUser(session.user)
+    } else {
+      setGoogleUser(null)
+    }
+  }, [session])
+
   const connectMetaMask = async () => {
     if (!hasMetaMask) {
       alert('MetaMask가 설치되지 않았습니다. 앱 내 지갑 생성 기능을 사용해주세요!')
@@ -218,6 +235,11 @@ export default function Home() {
     }
     
     setShowMyDataConsent(true)
+  }
+
+  const handleGoogleLoginSuccess = (user: any) => {
+    setGoogleUser(user)
+    console.log('구글 로그인 성공:', user)
   }
 
   const handleMyDataConsent = (dataType: string, consent: boolean) => {
@@ -356,7 +378,7 @@ export default function Home() {
     )
   }
 
-  if (isLoading) {
+  if (isLoading || status === 'loading') {
     return (
       <div className="min-h-screen bg-gradient-to-br from-blue-500 via-purple-500 to-green-500 flex items-center justify-center">
         <div className="text-center">
@@ -368,8 +390,8 @@ export default function Home() {
     )
   }
 
-  // 지갑이 설정되었다면 메인 앱 표시 (간소화)
-  if (walletAddress) {
+  // 지갑이 설정되었다면 메인 앱 표시 (완전한 기능)
+  if (walletAddress && googleUser) {
     return (
       <div className="min-h-screen bg-gray-50">
         <header className="bg-gradient-to-r from-blue-500 via-purple-500 to-green-500">
@@ -387,7 +409,16 @@ export default function Home() {
                 </div>
               </div>
               <div className="text-right">
-                <p className="text-white/80 text-xs">지갑 주소</p>
+                <div className="flex items-center space-x-2 mb-1">
+                  {googleUser.image && (
+                    <img 
+                      src={googleUser.image} 
+                      alt="프로필"
+                      className="w-6 h-6 rounded-full"
+                    />
+                  )}
+                  <p className="text-white/80 text-xs">{googleUser.name}</p>
+                </div>
                 <p className="text-white text-sm font-mono">
                   {walletAddress.slice(0, 6)}...{walletAddress.slice(-4)}
                 </p>
@@ -405,74 +436,413 @@ export default function Home() {
           </div>
         )}
 
+        {/* 탭 네비게이션 복구 */}
+        <div className="bg-white border-b border-gray-200">
+          <div className="flex overflow-x-auto">
+            <button
+              onClick={() => setCurrentView('dashboard')}
+              className={`flex-1 py-4 px-6 text-center font-medium whitespace-nowrap ${
+                currentView === 'dashboard' 
+                  ? 'text-blue-600 border-b-2 border-blue-600' 
+                  : 'text-gray-500'
+              }`}
+            >
+              대시보드
+            </button>
+            <button
+              onClick={() => setCurrentView('exchange')}
+              className={`flex-1 py-4 px-6 text-center font-medium whitespace-nowrap ${
+                currentView === 'exchange' 
+                  ? 'text-blue-600 border-b-2 border-blue-600' 
+                  : 'text-gray-500'
+              }`}
+            >
+              환전하기
+            </button>
+            <button
+              onClick={() => setCurrentView('account')}
+              className={`flex-1 py-4 px-6 text-center font-medium whitespace-nowrap ${
+                currentView === 'account' 
+                  ? 'text-blue-600 border-b-2 border-blue-600' 
+                  : 'text-gray-500'
+              }`}
+            >
+              계좌관리
+            </button>
+            <button
+              onClick={() => setCurrentView('mydata')}
+              className={`flex-1 py-4 px-6 text-center font-medium whitespace-nowrap ${
+                currentView === 'mydata' 
+                  ? 'text-blue-600 border-b-2 border-blue-600' 
+                  : 'text-gray-500'
+              }`}
+            >
+              마이데이터
+            </button>
+          </div>
+        </div>
+
         <main className="px-4 py-8">
           <div className="max-w-md mx-auto space-y-6">
-            {/* USDT 잔액 */}
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
-              <h2 className="text-lg font-semibold text-gray-900 mb-4">USDT 잔액</h2>
-              <div className="text-center">
-                <p className="text-4xl font-bold text-green-600 mb-2">{usdtBalance.toFixed(2)} USDT</p>
-                <p className="text-gray-600 text-sm">≈ {Math.round(usdtBalance * krwRate).toLocaleString()}원</p>
-                <p className="text-blue-600 text-xs mt-1">1 USDT = {krwRate.toLocaleString()}원</p>
-              </div>
-            </div>
+            
+            {/* 대시보드 */}
+            {currentView === 'dashboard' && (
+              <>
+                {/* USDT 잔액 */}
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+                  <h2 className="text-lg font-semibold text-gray-900 mb-4">USDT 잔액</h2>
+                  <div className="text-center">
+                    <p className="text-4xl font-bold text-green-600 mb-2">{usdtBalance.toFixed(2)} USDT</p>
+                    <p className="text-gray-600 text-sm">≈ {Math.round(usdtBalance * krwRate).toLocaleString()}원</p>
+                    <p className="text-blue-600 text-xs mt-1">1 USDT = {krwRate.toLocaleString()}원</p>
+                  </div>
+                </div>
 
-            {/* AI 서비스 수익 */}
-            <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
-              <h3 className="text-lg font-semibold text-gray-900 mb-4">AI 서비스 수익</h3>
-              <div className="space-y-3">
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700">온라인 판매 자동화</span>
-                  <span className="text-green-600 font-semibold">324.50 USDT</span>
+                {/* AI 서비스 수익 */}
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">AI 서비스 수익</h3>
+                  <div className="space-y-3">
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-700">온라인 판매 자동화</span>
+                      <span className="text-green-600 font-semibold">324.50 USDT</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-700">앱 개발 자동화</span>
+                      <span className="text-green-600 font-semibold">456.20 USDT</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-700">밈코인 트레이딩</span>
+                      <span className="text-green-600 font-semibold">289.15 USDT</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-700">CPC/CPM 광고</span>
+                      <span className="text-green-600 font-semibold">112.30 USDT</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-gray-700">음악 생성/등록</span>
+                      <span className="text-green-600 font-semibold">65.70 USDT</span>
+                    </div>
+                  </div>
                 </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700">앱 개발 자동화</span>
-                  <span className="text-green-600 font-semibold">456.20 USDT</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700">밈코인 트레이딩</span>
-                  <span className="text-green-600 font-semibold">289.15 USDT</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700">CPC/CPM 광고</span>
-                  <span className="text-green-600 font-semibold">112.30 USDT</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-gray-700">음악 생성/등록</span>
-                  <span className="text-green-600 font-semibold">65.70 USDT</span>
-                </div>
-              </div>
-            </div>
 
-            {/* 지갑 재설정 버튼 */}
-            <button 
-              onClick={() => {
-                setWalletAddress('')
-                SafeStorage.remove('aitopia_wallet')
-              }}
-              className="w-full bg-gray-500 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
-            >
-              지갑 재설정
-            </button>
+                {/* 마이데이터 연동 상태 */}
+                {Object.values(myDataConsents).some(consent => consent) && (
+                  <div className="bg-gradient-to-r from-green-50 to-blue-50 border border-green-200 rounded-xl p-4">
+                    <h4 className="font-medium text-green-900 mb-2">마이데이터 연동 중</h4>
+                    <p className="text-sm text-green-700 mb-2">개인화된 AI 분석으로 수익률 향상!</p>
+                    <div className="flex gap-2 flex-wrap">
+                      {myDataConsents.financial && <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-full text-xs">금융</span>}
+                      {myDataConsents.telecom && <span className="px-2 py-1 bg-green-100 text-green-700 rounded-full text-xs">통신</span>}
+                      {myDataConsents.public && <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-full text-xs">공공</span>}
+                      {myDataConsents.shopping && <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded-full text-xs">쇼핑</span>}
+                      {myDataConsents.social && <span className="px-2 py-1 bg-pink-100 text-pink-700 rounded-full text-xs">SNS</span>}
+                    </div>
+                  </div>
+                )}
+
+                {/* 계정 재설정 버튼 */}
+                <button 
+                  onClick={() => {
+                    setWalletAddress('')
+                    setGoogleUser(null)
+                    SafeStorage.remove('aitopia_wallet')
+                  }}
+                  className="w-full bg-gray-500 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
+                >
+                  계정 재설정
+                </button>
+              </>
+            )}
+
+            {/* 환전하기 */}
+            {currentView === 'exchange' && (
+              <>
+                {/* 실시간 환율 */}
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-lg font-semibold text-gray-900">실시간 환율</h2>
+                    <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
+                  </div>
+                  <div className="text-center">
+                    <p className="text-3xl font-bold text-blue-600 mb-2">
+                      1 USDT = {krwRate.toLocaleString()}원
+                    </p>
+                    <p className="text-sm text-gray-500">5초마다 자동 업데이트</p>
+                  </div>
+                </div>
+
+                {/* 환전 신청 */}
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">USDT → 원화 환전</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        환전할 USDT 금액
+                      </label>
+                      <div className="relative">
+                        <input
+                          type="number"
+                          value={exchangeAmount}
+                          onChange={(e) => setExchangeAmount(e.target.value)}
+                          placeholder="0.00"
+                          className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                          max={usdtBalance}
+                        />
+                        <span className="absolute right-3 top-3 text-gray-500 text-sm">USDT</span>
+                      </div>
+                      <p className="text-xs text-gray-500 mt-1">
+                        최대 {usdtBalance} USDT 환전 가능
+                      </p>
+                    </div>
+                    
+                    {exchangeAmount && (
+                      <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                        <p className="text-sm text-blue-900">
+                          <span className="font-semibold">{exchangeAmount} USDT</span> → 
+                          <span className="font-semibold text-lg"> {Math.round(parseFloat(exchangeAmount || '0') * krwRate).toLocaleString()}원</span>
+                        </p>
+                        <p className="text-xs text-blue-700 mt-1">
+                          수수료: 0.5% (약 {Math.round(parseFloat(exchangeAmount || '0') * krwRate * 0.005).toLocaleString()}원)
+                        </p>
+                      </div>
+                    )}
+
+                    <button
+                      onClick={handleExchange}
+                      disabled={!exchangeAmount || !bankAccount}
+                      className="w-full bg-blue-500 hover:bg-blue-600 disabled:bg-gray-300 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
+                    >
+                      환전 신청하기
+                    </button>
+                  </div>
+                </div>
+
+                {/* 환전 내역 */}
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-4">환전 내역</h3>
+                  <div className="space-y-3">
+                    {exchangeHistory.map((item) => (
+                      <div key={item.id} className="flex justify-between items-center py-3 border-b border-gray-100 last:border-b-0">
+                        <div>
+                          <p className="font-medium text-gray-900">
+                            {item.amount} USDT → {item.krw.toLocaleString()}원
+                          </p>
+                          <p className="text-sm text-gray-500">{item.date}</p>
+                        </div>
+                        <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          item.status === '완료' 
+                            ? 'bg-green-100 text-green-600' 
+                            : 'bg-yellow-100 text-yellow-600'
+                        }`}>
+                          {item.status}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </>
+            )}
+
+            {/* 계좌관리 */}
+            {currentView === 'account' && (
+              <>
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+                  <h2 className="text-lg font-semibold text-gray-900 mb-4">출금 계좌 등록</h2>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        은행명
+                      </label>
+                      <select
+                        value={bankName}
+                        onChange={(e) => setBankName(e.target.value)}
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      >
+                        <option value="">은행을 선택하세요</option>
+                        <option value="KB국민은행">KB국민은행</option>
+                        <option value="신한은행">신한은행</option>
+                        <option value="우리은행">우리은행</option>
+                        <option value="하나은행">하나은행</option>
+                        <option value="NH농협은행">NH농협은행</option>
+                        <option value="카카오뱅크">카카오뱅크</option>
+                        <option value="토스뱅크">토스뱅크</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        계좌번호
+                      </label>
+                      <input
+                        type="text"
+                        value={bankAccount}
+                        onChange={(e) => setBankAccount(e.target.value)}
+                        placeholder="'-' 없이 숫자만 입력"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        예금주명
+                      </label>
+                      <input
+                        type="text"
+                        value={accountHolder}
+                        onChange={(e) => setAccountHolder(e.target.value)}
+                        placeholder="실명을 입력하세요"
+                        className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <button
+                      onClick={handleBankAccountSave}
+                      className="w-full bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
+                    >
+                      계좌 등록하기
+                    </button>
+                  </div>
+                </div>
+
+                {bankAccount && accountHolder && bankName && (
+                  <div className="bg-green-50 border border-green-200 rounded-xl p-4">
+                    <h4 className="font-medium text-green-900 mb-2">등록된 출금 계좌</h4>
+                    <div className="text-sm text-green-700">
+                      <p>{bankName}</p>
+                      <p>{bankAccount}</p>
+                      <p>{accountHolder}</p>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+
+            {/* 마이데이터 연동 현황 */}
+            {currentView === 'mydata' && (
+              <>
+                <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
+                  <h2 className="text-lg font-semibold text-gray-900 mb-4">마이데이터 연동 현황</h2>
+                  <div className="space-y-4">
+                    {[
+                      { key: 'financial', name: '금융데이터', icon: '💳', color: 'blue' },
+                      { key: 'telecom', name: '통신데이터', icon: '📱', color: 'green' },
+                      { key: 'public', name: '공공데이터', icon: '🏛️', color: 'purple' },
+                      { key: 'shopping', name: '쇼핑데이터', icon: '🛍️', color: 'orange' },
+                      { key: 'social', name: 'SNS/웹활동', icon: '🌐', color: 'pink' }
+                    ].map((item) => (
+                      <div key={item.key} className="flex items-center justify-between p-3 border border-gray-200 rounded-xl">
+                        <div className="flex items-center space-x-3">
+                          <span className="text-2xl">{item.icon}</span>
+                          <span className="font-medium text-gray-900">{item.name}</span>
+                        </div>
+                        <div className="flex items-center space-x-3">
+                          <span className={`px-2 py-1 rounded-full text-xs ${
+                            myDataConsents[item.key as keyof typeof myDataConsents] 
+                              ? 'bg-green-100 text-green-700' 
+                              : 'bg-gray-100 text-gray-500'
+                          }`}>
+                            {myDataConsents[item.key as keyof typeof myDataConsents] ? '연동됨' : '미연동'}
+                          </span>
+                          <label className="relative inline-flex items-center cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={myDataConsents[item.key as keyof typeof myDataConsents]}
+                              onChange={(e) => handleMyDataConsent(item.key, e.target.checked)}
+                              className="sr-only peer"
+                            />
+                            <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
+                          </label>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="bg-blue-50 border border-blue-200 rounded-xl p-4">
+                  <h4 className="font-medium text-blue-900 mb-2">데이터 활용 혜택</h4>
+                  <div className="text-sm text-blue-700 space-y-1">
+                    <p>• 연동된 데이터 1개당 수익률 +5% 향상</p>
+                    <p>• 개인 맞춤형 투자 기회 우선 알림</p>
+                    <p>• AI 분석 기반 리스크 최소화</p>
+                    <p>• 실시간 시장 트렌드 알림 서비스</p>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </main>
       </div>
     )
   }
 
+  // 구글 로그인이 필요한 경우
+  if (!googleUser) {
+    return (
+      <div className="min-h-screen bg-gray-50">
+        <header className="bg-gradient-to-r from-blue-500 via-purple-500 to-green-500">
+          <div className="px-4 py-6">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-white">AITOPIA</h1>
+                <p className="text-white/80 text-sm">AI 수익화 플랫폼</p>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="px-4 py-8">
+          <div className="max-w-md mx-auto">
+            <div className="text-center mb-8">
+              <h2 className="text-3xl font-bold text-gray-900 mb-3">로그인</h2>
+              <p className="text-gray-600">
+                AI 수익화 서비스를 이용하려면<br/>
+                구글 계정으로 로그인해주세요
+              </p>
+            </div>
+
+            <GoogleLogin onLoginSuccess={handleGoogleLoginSuccess} />
+          </div>
+        </main>
+      </div>
+    )
+  }
+
+  // 지갑 설정 화면
   return (
     <div className="min-h-screen bg-gray-50">
       <header className="bg-gradient-to-r from-blue-500 via-purple-500 to-green-500">
         <div className="px-4 py-6">
-          <div className="flex items-center space-x-3">
-            <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
-              <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-3">
+              <div className="w-10 h-10 bg-white/20 rounded-xl flex items-center justify-center">
+                <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold text-white">AITOPIA</h1>
+                <p className="text-white/80 text-sm">AI 수익화 플랫폼</p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-2xl font-bold text-white">AITOPIA</h1>
-              <p className="text-white/80 text-sm">AI 수익화 플랫폼</p>
+            <div className="text-right">
+              <div className="flex items-center space-x-2">
+                {googleUser?.image && (
+                  <img 
+                    src={googleUser.image} 
+                    alt="프로필"
+                    className="w-8 h-8 rounded-full"
+                  />
+                )}
+                <div>
+                  <p className="text-white/80 text-xs">{googleUser?.name}</p>
+                  <p className="text-white text-xs">{googleUser?.email}</p>
+                </div>
+              </div>
             </div>
           </div>
         </div>
