@@ -2,6 +2,60 @@
 
 import { useState, useEffect } from 'react'
 
+// 안전한 저장소 접근 유틸리티
+const SafeStorage = {
+  isAvailable: false,
+  
+  init() {
+    try {
+      if (typeof window !== 'undefined' && window.localStorage) {
+        // localStorage 접근 테스트
+        const testKey = '__storage_test__'
+        localStorage.setItem(testKey, 'test')
+        localStorage.removeItem(testKey)
+        this.isAvailable = true
+        return true
+      }
+    } catch (error) {
+      console.log('localStorage 사용 불가:', error)
+      this.isAvailable = false
+    }
+    return false
+  },
+
+  get(key: string): string | null {
+    if (!this.isAvailable) return null
+    try {
+      return localStorage.getItem(key)
+    } catch (error) {
+      console.log(`저장소 읽기 실패 (${key}):`, error)
+      return null
+    }
+  },
+
+  set(key: string, value: string): boolean {
+    if (!this.isAvailable) return false
+    try {
+      localStorage.setItem(key, value)
+      return true
+    } catch (error) {
+      console.log(`저장소 쓰기 실패 (${key}):`, error)
+      return false
+    }
+  },
+
+  remove(key: string): boolean {
+    if (!this.isAvailable) return false
+    try {
+      localStorage.removeItem(key)
+      return true
+    } catch (error) {
+      console.log(`저장소 삭제 실패 (${key}):`, error)
+      return false
+    }
+  }
+}
+
 export default function Home() {
   const [isLoading, setIsLoading] = useState(true)
   const [walletAddress, setWalletAddress] = useState('')
@@ -13,6 +67,8 @@ export default function Home() {
   const [bankAccount, setBankAccount] = useState('')
   const [accountHolder, setAccountHolder] = useState('')
   const [bankName, setBankName] = useState('')
+  const [hasMetaMask, setHasMetaMask] = useState(false)
+  const [storageAvailable, setStorageAvailable] = useState(false)
   
   // 마이데이터 동의 상태
   const [myDataConsents, setMyDataConsents] = useState({
@@ -29,38 +85,52 @@ export default function Home() {
   ])
 
   useEffect(() => {
-    // 브라우저 환경에서만 localStorage 접근
     const initializeApp = () => {
       try {
-        if (typeof window !== 'undefined' && window.localStorage) {
-          const savedWallet = localStorage.getItem('aitopia_wallet')
-          const savedAccount = localStorage.getItem('aitopia_bank_account')
-          const savedHolder = localStorage.getItem('aitopia_account_holder')
-          const savedBank = localStorage.getItem('aitopia_bank_name')
-          const savedConsents = localStorage.getItem('aitopia_mydata_consents')
+        // 안전한 저장소 초기화
+        const storageReady = SafeStorage.init()
+        setStorageAvailable(storageReady)
+
+        // MetaMask 감지 (에러 방지)
+        if (typeof window !== 'undefined') {
+          setHasMetaMask(typeof window.ethereum !== 'undefined')
           
-          if (savedWallet) setWalletAddress(savedWallet)
-          if (savedAccount) setBankAccount(savedAccount)
-          if (savedHolder) setAccountHolder(savedHolder)
-          if (savedBank) setBankName(savedBank)
-          if (savedConsents) setMyDataConsents(JSON.parse(savedConsents))
+          // 저장된 데이터 불러오기 (저장소 사용 가능한 경우만)
+          if (storageReady) {
+            const savedWallet = SafeStorage.get('aitopia_wallet')
+            const savedAccount = SafeStorage.get('aitopia_bank_account')
+            const savedHolder = SafeStorage.get('aitopia_account_holder')
+            const savedBank = SafeStorage.get('aitopia_bank_name')
+            const savedConsents = SafeStorage.get('aitopia_mydata_consents')
+            
+            if (savedWallet) setWalletAddress(savedWallet)
+            if (savedAccount) setBankAccount(savedAccount)
+            if (savedHolder) setAccountHolder(savedHolder)
+            if (savedBank) setBankName(savedBank)
+            if (savedConsents) {
+              try {
+                setMyDataConsents(JSON.parse(savedConsents))
+              } catch (parseError) {
+                console.log('동의 정보 파싱 실패:', parseError)
+              }
+            }
+          }
         }
       } catch (error) {
-        console.log('localStorage 접근 불가:', error)
+        console.log('초기화 에러 (무시 가능):', error)
       }
       
       setIsLoading(false)
     }
 
-    // 실시간 환율 업데이트 시뮬레이션
     const updateExchangeRate = () => {
       const baseRate = 1340
-      const fluctuation = (Math.random() - 0.5) * 20 // ±10원 변동
+      const fluctuation = (Math.random() - 0.5) * 20
       setKrwRate(Math.round(baseRate + fluctuation))
     }
 
     const timer = setTimeout(initializeApp, 1000)
-    const rateTimer = setInterval(updateExchangeRate, 5000) // 5초마다 환율 업데이트
+    const rateTimer = setInterval(updateExchangeRate, 5000)
 
     return () => {
       clearTimeout(timer)
@@ -68,16 +138,33 @@ export default function Home() {
     }
   }, [])
 
-  const handleWalletSetup = (address: string) => {
-    setWalletAddress(address)
+  const connectMetaMask = async () => {
+    if (!hasMetaMask) {
+      alert('MetaMask가 설치되지 않았습니다. 앱 내 지갑 생성 기능을 사용해주세요!')
+      return
+    }
+
     try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.setItem('aitopia_wallet', address)
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' })
+      if (accounts.length > 0) {
+        handleWalletSetup(accounts[0])
       }
     } catch (error) {
-      console.log('localStorage 저장 실패:', error)
+      console.log('MetaMask 연결 실패:', error)
+      alert('MetaMask 연결에 실패했습니다. 수동으로 지갑 주소를 입력해주세요.')
     }
-    // 지갑 설정 후 마이데이터 동의 화면 표시
+  }
+
+  const handleWalletSetup = (address: string) => {
+    setWalletAddress(address)
+    
+    // 안전한 저장소에 저장
+    const saved = SafeStorage.set('aitopia_wallet', address)
+    if (!saved && storageAvailable === false) {
+      // 저장소 사용 불가 시 사용자에게 안내
+      console.log('지갑 주소가 임시로 저장되었습니다. 브라우저를 새로고침하면 다시 입력해야 합니다.')
+    }
+    
     setShowMyDataConsent(true)
   }
 
@@ -85,25 +172,20 @@ export default function Home() {
     const newConsents = { ...myDataConsents, [dataType]: consent }
     setMyDataConsents(newConsents)
     
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.setItem('aitopia_mydata_consents', JSON.stringify(newConsents))
-      }
-    } catch (error) {
-      console.log('마이데이터 동의 저장 실패:', error)
-    }
+    // 안전한 저장소에 저장
+    SafeStorage.set('aitopia_mydata_consents', JSON.stringify(newConsents))
   }
 
   const handleBankAccountSave = () => {
-    try {
-      if (typeof window !== 'undefined' && window.localStorage) {
-        localStorage.setItem('aitopia_bank_account', bankAccount)
-        localStorage.setItem('aitopia_account_holder', accountHolder)
-        localStorage.setItem('aitopia_bank_name', bankName)
-      }
+    // 안전한 저장소에 저장
+    const saved1 = SafeStorage.set('aitopia_bank_account', bankAccount)
+    const saved2 = SafeStorage.set('aitopia_account_holder', accountHolder)
+    const saved3 = SafeStorage.set('aitopia_bank_name', bankName)
+    
+    if (saved1 && saved2 && saved3) {
       alert('은행 계좌가 등록되었습니다!')
-    } catch (error) {
-      console.log('은행 계좌 저장 실패:', error)
+    } else {
+      alert('은행 계좌가 임시 저장되었습니다. (브라우저 새로고침 시 재입력 필요)')
     }
   }
 
@@ -161,6 +243,16 @@ export default function Home() {
                 마이데이터 사용에 동의해주세요
               </p>
             </div>
+
+            {/* 저장소 상태 안내 */}
+            {!storageAvailable && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                <h4 className="font-medium text-yellow-900 mb-1">⚠️ 저장소 제한</h4>
+                <p className="text-yellow-700 text-sm">
+                  브라우저 설정으로 인해 데이터가 임시 저장됩니다. 새로고침 시 재설정이 필요할 수 있습니다.
+                </p>
+              </div>
+            )}
 
             {/* 금융데이터 */}
             <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
@@ -388,7 +480,15 @@ export default function Home() {
           </div>
         </header>
 
-        {/* 탭 네비게이션 */}
+        {/* 저장소 제한 안내 */}
+        {!storageAvailable && (
+          <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-2">
+            <p className="text-yellow-700 text-sm text-center">
+              ⚠️ 데이터가 임시 저장됩니다. 새로고침 시 재설정이 필요할 수 있습니다.
+            </p>
+          </div>
+        )}
+
         <div className="bg-white border-b border-gray-200">
           <div className="flex overflow-x-auto">
             <button
@@ -746,6 +846,37 @@ export default function Home() {
           </div>
 
           <div className="space-y-6">
+            {/* 저장소 상태 안내 */}
+            {!storageAvailable && (
+              <div className="bg-yellow-50 border border-yellow-200 rounded-xl p-4">
+                <h4 className="font-medium text-yellow-900 mb-1">⚠️ 저장소 제한</h4>
+                <p className="text-yellow-700 text-sm">
+                  브라우저 설정으로 인해 데이터가 임시 저장됩니다. 새로고침 시 재설정이 필요할 수 있습니다.
+                </p>
+              </div>
+            )}
+
+            {/* MetaMask 연결 (가능한 경우) */}
+            {hasMetaMask && (
+              <div className="bg-orange-50 border border-orange-200 rounded-2xl shadow-lg p-6">
+                <div className="flex items-center space-x-3 mb-4">
+                  <div className="w-12 h-12 bg-orange-100 rounded-xl flex items-center justify-center">
+                    <span className="text-2xl">🦊</span>
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900">MetaMask 연결</h3>
+                    <p className="text-sm text-gray-600">기존 MetaMask 지갑 연결</p>
+                  </div>
+                </div>
+                <button 
+                  onClick={connectMetaMask}
+                  className="w-full bg-orange-500 hover:bg-orange-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
+                >
+                  MetaMask 연결하기
+                </button>
+              </div>
+            )}
+
             <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
               <h3 className="text-lg font-semibold text-gray-900 mb-4">
                 새 지갑 생성
@@ -755,7 +886,6 @@ export default function Home() {
               </p>
               <button 
                 onClick={() => {
-                  // 새 지갑 생성 시뮬레이션
                   const newWallet = '0x' + Math.random().toString(16).substr(2, 40)
                   handleWalletSetup(newWallet)
                 }}
