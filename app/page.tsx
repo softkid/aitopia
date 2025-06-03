@@ -2,6 +2,16 @@
 
 import { useState, useEffect } from 'react'
 
+// MetaMask 타입 정의
+declare global {
+  interface Window {
+    ethereum?: {
+      request: (args: { method: string; params?: any[] }) => Promise<any>
+      isMetaMask?: boolean
+    }
+  }
+}
+
 // 완전히 안전한 저장소 접근 유틸리티 (에러 제로)
 const SafeStorage = {
   isAvailable: false,
@@ -125,7 +135,7 @@ export default function Home() {
         // MetaMask 감지 (완전 안전)
         if (typeof window !== 'undefined') {
           try {
-            setHasMetaMask(!!window.ethereum)
+            setHasMetaMask(!!(window.ethereum && window.ethereum.isMetaMask))
           } catch (metaMaskError) {
             console.log('🦊 MetaMask detection skipped')
             setHasMetaMask(false)
