@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import GoogleLogin from './components/GoogleLogin'
+import { loadStripe } from '@stripe/stripe-js'
 
 // MetaMask 타입 정의
 declare global {
@@ -12,6 +13,26 @@ declare global {
       isMetaMask?: boolean
     }
   }
+}
+
+// 서비스 타입 정의
+interface AIService {
+  key: string
+  name: string
+  description: string
+  currentEarnings: number
+  maxEarnings: number
+  cost: string
+  costKrw: number
+  color: string
+  lightColor: string
+  textColor: string
+  requirements: string[]
+  features: string[]
+  isNew: boolean
+  isActive: boolean
+  category: string
+  order: number
 }
 
 // 완전히 안전한 저장소 접근 유틸리티 (에러 제로)
@@ -118,6 +139,10 @@ export default function Home() {
   const [hasMetaMask, setHasMetaMask] = useState(false)
   const [storageAvailable, setStorageAvailable] = useState(false)
   const [googleUser, setGoogleUser] = useState<any>(null)
+  const [selectedService, setSelectedService] = useState<string | null>(null)
+  const [subscribedServices, setSubscribedServices] = useState<string[]>([])
+  const [services, setServices] = useState<AIService[]>([])
+  const [servicesLoading, setServicesLoading] = useState(true)
   
   // 마이데이터 동의 상태
   const [myDataConsents, setMyDataConsents] = useState({
@@ -132,6 +157,33 @@ export default function Home() {
     { id: 1, amount: 500, krw: 670000, status: '완료', date: '2024-01-15' },
     { id: 2, amount: 300, krw: 402000, status: '처리중', date: '2024-01-14' },
   ])
+
+  // 서비스 데이터 로드
+  useEffect(() => {
+    const loadServices = async () => {
+      try {
+        setServicesLoading(true)
+        const response = await fetch('/api/services')
+        const data = await response.json()
+        
+        if (data.success && data.services) {
+          setServices(data.services)
+          if (data.fallback) {
+            console.log('📊 Using fallback service data (Airtable connection failed)')
+          } else {
+            console.log('📊 Services loaded from Airtable successfully')
+          }
+        }
+      } catch (error) {
+        console.error('서비스 데이터 로드 실패:', error)
+        // 기본 서비스 데이터 유지
+      } finally {
+        setServicesLoading(false)
+      }
+    }
+
+    loadServices()
+  }, [])
 
   useEffect(() => {
     const initializeApp = async () => {
@@ -287,6 +339,112 @@ export default function Home() {
     setExchangeAmount('')
     alert(`${amount} USDT → ${krwAmount.toLocaleString()}원 환전 신청이 완료되었습니다!`)
   }
+
+  // Stripe 결제 처리
+  const handleServiceSubscription = async (serviceKey: string) => {
+    try {
+      const service = services.find(s => s.key === serviceKey)
+      if (!service) {
+        alert('서비스 정보를 찾을 수 없습니다.')
+        return
+      }
+      
+      // 결제 확인
+      const confirmPayment = confirm(
+        `${service.name} 서비스에 가입하시겠습니까?\n비용: ${service.cost}\n\n실제 결제가 진행됩니다.`
+      )
+      
+      if (!confirmPayment) return
+
+      // 로딩 상태 표시
+      const loadingAlert = alert('결제를 준비하고 있습니다...')
+
+      try {
+        // 1. PaymentIntent 생성
+        const response = await fetch('/api/create-payment-intent', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            serviceKey: serviceKey,
+            currency: 'krw'
+          }),
+        })
+
+        const { clientSecret, error } = await response.json()
+
+        if (error) {
+          throw new Error(error)
+        }
+
+        // 2. Stripe 초기화
+        const stripe = await loadStripe(process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY!)
+        
+        if (!stripe) {
+          throw new Error('Stripe를 로드할 수 없습니다.')
+        }
+
+        // 3. 결제 처리 (간단한 확인 결제)
+        const { error: paymentError } = await stripe.confirmPayment({
+          clientSecret,
+          confirmParams: {
+            return_url: `${window.location.origin}?payment=success&service=${serviceKey}`,
+          },
+        })
+
+        if (paymentError) {
+          throw new Error(paymentError.message)
+        }
+
+        // 성공 처리
+        setSubscribedServices([...subscribedServices, serviceKey])
+        alert(`🎉 ${service.name} 서비스 가입이 완료되었습니다!\n\n첫 수익은 24시간 내에 시작됩니다.`)
+        setSelectedService(null)
+
+      } catch (stripeError: any) {
+        console.error('Stripe 결제 오류:', stripeError)
+        
+        // 데모 모드로 대체 (개발 환경)
+        if (process.env.NODE_ENV === 'development') {
+          const demoConfirm = confirm(
+            `⚠️ 결제 서비스 연결 중 오류가 발생했습니다.\n\n데모 모드로 서비스를 체험해보시겠습니까?\n(실제 결제는 되지 않습니다)`
+          )
+          
+          if (demoConfirm) {
+            setSubscribedServices([...subscribedServices, serviceKey])
+            alert(`✨ 데모 모드로 ${service.name} 서비스가 활성화되었습니다!\n\n※ 실제 수익은 정식 결제 후 시작됩니다.`)
+            setSelectedService(null)
+          }
+        } else {
+          alert('결제 중 오류가 발생했습니다. 잠시 후 다시 시도해주세요.')
+        }
+      }
+    } catch (error: any) {
+      console.error('서비스 가입 오류:', error)
+      alert('서비스 가입 중 오류가 발생했습니다. 고객센터로 문의해주세요.')
+    }
+  }
+
+  // URL 파라미터에서 결제 성공 확인
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const urlParams = new URLSearchParams(window.location.search)
+      const paymentStatus = urlParams.get('payment')
+      const serviceKey = urlParams.get('service')
+      
+      if (paymentStatus === 'success' && serviceKey) {
+        // 결제 성공 처리
+        setSubscribedServices(prev => [...prev, serviceKey])
+        
+        // URL 파라미터 제거
+        window.history.replaceState({}, document.title, window.location.pathname)
+        
+        const service = services.find(s => s.key === serviceKey)
+        alert(`🎉 ${service?.name} 결제가 완료되었습니다!\n\n서비스가 자동으로 시작됩니다.`)
+      }
+    }
+  }, [services])
 
   // 마이데이터 동의 화면
   if (showMyDataConsent) {
@@ -498,29 +656,82 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* AI 서비스 수익 */}
+                {/* AI 서비스 수익 (Bar 형태로 개선 + Airtable 연동) */}
                 <div className="bg-white rounded-2xl shadow-lg border border-gray-200 p-6">
-                  <h3 className="text-lg font-semibold text-gray-900 mb-4">AI 서비스 수익</h3>
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-700">온라인 판매 자동화</span>
-                      <span className="text-green-600 font-semibold">324.50 USDT</span>
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="text-lg font-semibold text-gray-900">AI 서비스 수익 현황</h3>
+                    {servicesLoading && (
+                      <div className="w-4 h-4 border-2 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
+                    )}
+                  </div>
+                  
+                  {servicesLoading ? (
+                    <div className="text-center py-8">
+                      <div className="w-8 h-8 border-2 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                      <p className="text-gray-500">서비스 데이터 로딩 중...</p>
                     </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-700">앱 개발 자동화</span>
-                      <span className="text-green-600 font-semibold">456.20 USDT</span>
+                  ) : (
+                    <div className="space-y-4">
+                      {services.map((service) => {
+                        const isSubscribed = subscribedServices.includes(service.key)
+                        const progressPercentage = (service.currentEarnings / service.maxEarnings) * 100
+                        
+                        return (
+                          <div 
+                            key={service.key}
+                            onClick={() => setSelectedService(service.key)}
+                            className={`cursor-pointer hover:bg-gray-50 p-4 rounded-xl border transition-all duration-200 ${
+                              service.isNew 
+                                ? 'border-gradient-to-r from-purple-200 to-pink-200 bg-gradient-to-r from-purple-50 to-pink-50' 
+                                : 'border-gray-100 hover:border-gray-200'
+                            }`}
+                          >
+                            <div className="flex justify-between items-center mb-3">
+                              <div className="flex items-center space-x-3">
+                                <div className={`w-3 h-3 rounded-full ${service.color}`}></div>
+                                <div className="flex items-center space-x-2">
+                                  <span className="font-medium text-gray-900">{service.name}</span>
+                                  {service.isNew && (
+                                    <span className="bg-gradient-to-r from-purple-500 to-pink-500 text-white text-xs font-bold px-2 py-1 rounded-full animate-pulse">
+                                      NEW
+                                    </span>
+                                  )}
+                                  {isSubscribed && (
+                                    <span className="px-2 py-1 bg-green-100 text-green-600 text-xs rounded-full">가입중</span>
+                                  )}
+                                </div>
+                              </div>
+                              <span className="text-green-600 font-semibold">{service.currentEarnings} USDT</span>
+                            </div>
+                            
+                            {/* Progress Bar */}
+                            <div className="w-full bg-gray-200 rounded-full h-2.5 mb-2">
+                              <div 
+                                className={`h-2.5 rounded-full transition-all duration-500 ${
+                                  service.isNew 
+                                    ? 'bg-gradient-to-r from-purple-500 to-pink-500' 
+                                    : service.color
+                                }`}
+                                style={{ width: `${progressPercentage}%` }}
+                              ></div>
+                            </div>
+                            
+                            <div className="flex justify-between text-xs text-gray-500">
+                              <span>현재 수익</span>
+                              <span>목표: {service.maxEarnings} USDT</span>
+                            </div>
+                          </div>
+                        )
+                      })}
                     </div>
+                  )}
+                  
+                  <div className="mt-6 pt-4 border-t border-gray-200">
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-700">밈코인 트레이딩</span>
-                      <span className="text-green-600 font-semibold">289.15 USDT</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-700">CPC/CPM 광고</span>
-                      <span className="text-green-600 font-semibold">112.30 USDT</span>
-                    </div>
-                    <div className="flex justify-between items-center">
-                      <span className="text-gray-700">음악 생성/등록</span>
-                      <span className="text-green-600 font-semibold">65.70 USDT</span>
+                      <span className="text-lg font-semibold text-gray-900">총 수익</span>
+                      <span className="text-xl font-bold text-green-600">
+                        {services.reduce((sum, service) => sum + service.currentEarnings, 0).toFixed(2)} USDT
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -771,6 +982,125 @@ export default function Home() {
             )}
           </div>
         </main>
+
+        {/* 서비스 상세 정보 모달 (업데이트된 서비스 데이터 사용) */}
+        {selectedService && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
+            <div className="bg-white rounded-2xl max-w-md w-full max-h-[90vh] overflow-y-auto">
+              <div className="p-6">
+                {(() => {
+                  const service = services.find(s => s.key === selectedService)
+                  if (!service) return null
+                  
+                  return (
+                    <>
+                      <div className="flex justify-between items-start mb-4">
+                        <div>
+                          <div className="flex items-center space-x-2 mb-2">
+                            <h2 className="text-xl font-bold text-gray-900">{service.name}</h2>
+                            {service.isNew && (
+                              <span className="bg-gradient-to-r from-purple-500 to-pink-500 text-white text-xs font-bold px-2 py-1 rounded-full">
+                                NEW
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-gray-600 text-sm">{service.description}</p>
+                        </div>
+                        <button
+                          onClick={() => setSelectedService(null)}
+                          className="text-gray-400 hover:text-gray-600"
+                        >
+                          <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                          </svg>
+                        </button>
+                      </div>
+
+                      {/* 가입 비용 */}
+                      <div className={`border rounded-xl p-4 mb-6 ${
+                        service.isNew 
+                          ? 'bg-gradient-to-r from-purple-50 to-pink-50 border-purple-200' 
+                          : 'bg-blue-50 border-blue-200'
+                      }`}>
+                        <h3 className={`font-semibold mb-2 ${
+                          service.isNew ? 'text-purple-900' : 'text-blue-900'
+                        }`}>
+                          💰 가입 비용
+                        </h3>
+                        <p className={`text-2xl font-bold ${
+                          service.isNew ? 'text-purple-600' : 'text-blue-600'
+                        }`}>
+                          {service.cost}
+                        </p>
+                        <p className={`text-sm mt-1 ${
+                          service.isNew ? 'text-purple-700' : 'text-blue-700'
+                        }`}>
+                          최초 1개월 결제 후 자동 갱신
+                        </p>
+                      </div>
+
+                      {/* 필요 자료 */}
+                      <div className="mb-6">
+                        <h3 className="font-semibold text-gray-900 mb-3">📋 준비 자료</h3>
+                        <ul className="space-y-2">
+                          {service.requirements.map((req, index) => (
+                            <li key={index} className="flex items-start space-x-2">
+                              <span className="text-green-500 font-bold">•</span>
+                              <span className="text-gray-700 text-sm">{req}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* 서비스 특징 */}
+                      <div className="mb-6">
+                        <h3 className="font-semibold text-gray-900 mb-3">⚡ 서비스 특징</h3>
+                        <ul className="space-y-2">
+                          {service.features.map((feature, index) => (
+                            <li key={index} className="flex items-start space-x-2">
+                              <span className="text-blue-500">✓</span>
+                              <span className="text-gray-700 text-sm">{feature}</span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      {/* 가입 버튼 */}
+                      <div className="space-y-3">
+                        {subscribedServices.includes(selectedService) ? (
+                          <div className="bg-green-50 border border-green-200 rounded-xl p-4 text-center">
+                            <span className="text-green-600 font-semibold">✅ 이미 가입된 서비스입니다</span>
+                          </div>
+                        ) : (
+                          <button
+                            onClick={() => handleServiceSubscription(selectedService)}
+                            className={`w-full font-semibold py-4 px-6 rounded-xl transition-all duration-200 flex items-center justify-center space-x-2 text-white ${
+                              service.isNew 
+                                ? 'bg-gradient-to-r from-purple-500 to-pink-500 hover:from-purple-600 hover:to-pink-600' 
+                                : 'bg-blue-500 hover:bg-blue-600'
+                            }`}
+                          >
+                            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z" />
+                            </svg>
+                            <span>Stripe로 결제하고 가입하기</span>
+                          </button>
+                        )}
+                        
+                        <button
+                          onClick={() => setSelectedService(null)}
+                          className="w-full bg-gray-500 hover:bg-gray-600 text-white font-semibold py-3 px-6 rounded-xl transition-all duration-200"
+                        >
+                          닫기
+                        </button>
+                      </div>
+                    </>
+                  )
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     )
   }

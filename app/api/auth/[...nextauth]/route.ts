@@ -1,7 +1,8 @@
 import NextAuth from 'next-auth'
 import GoogleProvider from 'next-auth/providers/google'
+import type { NextAuthOptions } from 'next-auth'
 
-const handler = NextAuth({
+const authOptions: NextAuthOptions = {
   providers: [
     GoogleProvider({
       clientId: process.env.GOOGLE_CLIENT_ID || 'demo_client_id',
@@ -17,12 +18,15 @@ const handler = NextAuth({
       return token
     },
     async session({ session, token }) {
-      session.accessToken = token.accessToken
-      session.user = token.user as any
+      if (token.accessToken) {
+        session.accessToken = token.accessToken as string
+      }
+      if (token.user) {
+        session.user = token.user as any
+      }
       return session
     },
     async signIn({ user, account, profile }) {
-      // 개발 환경에서는 모든 로그인 허용
       if (process.env.NODE_ENV === 'development') {
         return true
       }
@@ -43,9 +47,10 @@ const handler = NextAuth({
       console.log('NextAuth 경고 (무시됨):', code)
     },
     debug(code, metadata) {
-      // 개발 환경에서만 디버그 로그
     }
   }
-})
+}
+
+const handler = NextAuth(authOptions)
 
 export { handler as GET, handler as POST } 
